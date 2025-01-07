@@ -25,7 +25,7 @@ app.get('/', (req, res) => {
 // 游戏状态管理类
 class Game {
     constructor() {
-        this.targetNumber = '1234'; // 固定目标数字便于测试
+        this.targetNumber = this.generateRandomNumber(); // 随机生成目标数字
         this.players = {};
         this.currentPlayer = null;
         this.guesses = [];
@@ -45,7 +45,7 @@ class Game {
     }
 
     reset() {
-        this.targetNumber = '1234'; // 固定目标数字
+        this.targetNumber = this.generateRandomNumber(); // 随机生成目标数字
         this.currentPlayer = null;
         this.guesses = [];
         this.restartRequests = new Set();
