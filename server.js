@@ -5,10 +5,17 @@ const path = require('path');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
+const io = new Server(server, {
+    cors: {
+        origin: '*', // 如果前后端分离，允许所有来源。可改为指定的前端域名。
+        methods: ['GET', 'POST'],
+    },
+});
 
-const port = 3000;
+// 使用 Render 的动态端口
+const port = process.env.PORT || 3000;
 
+// 配置静态文件目录
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('/', (req, res) => {
@@ -152,6 +159,7 @@ function startGame() {
     }
 }
 
+// 启动服务器
 server.listen(port, () => {
     console.log(`服务器运行在 http://localhost:${port}`);
 });
