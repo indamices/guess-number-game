@@ -27,6 +27,11 @@
             font-size: 20px;
             padding: 10px 20px;
             margin-top: 10px;
+            cursor: pointer;
+        }
+        #guess-button:hover {
+            background-color: #007bff;
+            color: white;
         }
         #guesses {
             margin-top: 20px;
@@ -59,6 +64,7 @@
             font-size: 16px;
             padding: 10px 20px;
             margin: 10px;
+            cursor: pointer;
         }
     </style>
 </head>
@@ -104,6 +110,7 @@
             statusDiv.innerText = '请开始猜测';
             guessInput.disabled = false;
             guessButton.disabled = false;
+            guessInput.value = ''; // 清空输入框
             guessInput.focus();
         });
 
@@ -122,10 +129,10 @@
             // 区分“您的猜测”和“对手的猜测”
             if (data.player === role) {
                 guessDiv.innerText = `您的猜测：${data.guess}，结果：${data.result}`;
-                guessDiv.classList.add('your-guess'); // 您的猜测用蓝色显示
+                guessDiv.classList.add('your-guess');
             } else {
                 guessDiv.innerText = `对手的猜测：${data.guess}，结果：${data.result}`;
-                guessDiv.classList.add('opponent-guess'); // 对手的猜测用红色显示
+                guessDiv.classList.add('opponent-guess');
             }
 
             guessesDiv.appendChild(guessDiv);
@@ -141,21 +148,20 @@
                 <button id="exit-button">退出</button>
             `;
 
-            // 监听“再来一局”按钮
+            // 绑定“再来一局”按钮
             document.getElementById('restart-button').addEventListener('click', () => {
                 socket.emit('restart-game');
             });
-     
-            // 监听等待对方确认
-socket.on('waiting-for-opponent', () => {
-    resultDiv.innerHTML = `
-        <p>等待对方确认...</p>
-    `;
-});
-            // 监听“退出”按钮
+
+            // 绑定“退出”按钮
             document.getElementById('exit-button').addEventListener('click', () => {
                 socket.emit('exit-game');
             });
+        });
+
+        // 监听等待对方确认
+        socket.on('waiting-for-opponent', () => {
+            resultDiv.innerHTML = `<p>已请求再来一局，等待对方确认...</p>`;
         });
 
         // 监听游戏重新开始
@@ -176,9 +182,7 @@ socket.on('waiting-for-opponent', () => {
         });
 
         // 监听猜测按钮点击
-        guessButton.addEventListener('click', () => {
-            submitGuess();
-        });
+        guessButton.addEventListener('click', submitGuess);
 
         // 监听回车键
         guessInput.addEventListener('keypress', (e) => {
@@ -190,7 +194,7 @@ socket.on('waiting-for-opponent', () => {
         // 提交猜测
         function submitGuess() {
             const guess = guessInput.value;
-            if (guess.length !== 4 || new Set(guess).size !== 4) {
+            if (!/^\d{4}$/.test(guess) || new Set(guess).size !== 4) {
                 alert('请输入一个四位数，且数字不重复！');
                 return;
             }
