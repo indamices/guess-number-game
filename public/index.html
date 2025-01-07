@@ -85,12 +85,16 @@
             color: red;
             font-size: 14px;
         }
-        .fade-in {
-            animation: fadeIn 1s ease-in;
+        .your-turn-highlight {
+            animation: flash 1s infinite;
         }
-        @keyframes fadeIn {
-            from { opacity: 0; }
-            to { opacity: 1; }
+        @keyframes flash {
+            0% { background-color: #fff; }
+            50% { background-color: #f0f8ff; }
+            100% { background-color: #fff; }
+        }
+        .invitation {
+            margin-top: 20px;
         }
     </style>
 </head>
@@ -107,9 +111,25 @@
         <div id="result"></div>
     </div>
 
-    <script src="/socket.io/socket.io.js"></script>
+    <div class="invitation">
+        <p>邀请好友加入：</p>
+        <button id="copy-link">复制邀请链接</button>
+        <div id="qrcode"></div>
+    </div>
+
+    <!-- 提示音 -->
+    <audio id="turn-sound" src="turn-sound.mp3"></audio>
+    <audio id="victory-sound" src="victory.mp3"></audio>
+    <audio id="fail-sound" src="fail.mp3"></audio>
+
+    <script src="https://cdn.socket.io/4.6.0/socket.io.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/qrcode/build/qrcode.min.js"></script>
     <script>
-        const socket = io('http://localhost:3000');
+        // 动态获取 WebSocket 地址，适配 Render 和本地开发环境
+        const socket = io(window.location.origin, {
+            transports: ['websocket'], // 确保使用 WebSocket 传输
+        });
+
         const waitingDiv = document.getElementById('waiting');
         const gameDiv = document.getElementById('game');
         const guessInput = document.getElementById('guess-input');
@@ -118,19 +138,27 @@
         const statusDiv = document.getElementById('status');
         const resultDiv = document.getElementById('result');
         const errorMessage = document.getElementById('error-message');
+        const turnSound = document.getElementById('turn-sound');
+        const victorySound = document.getElementById('victory-sound');
+        const failSound = document.getElementById('fail-sound');
+        const copyLinkButton = document.getElementById('copy-link');
+        const qrCodeDiv = document.getElementById('qrcode');
 
         let role = null;
 
+        // 分配角色
         socket.on('role', (playerRole) => {
             role = playerRole;
             waitingDiv.innerText = `你是 ${role === 'player1' ? '玩家1' : '玩家2'}，等待游戏开始...`;
         });
 
+        // 游戏开始
         socket.on('game-start', () => {
             waitingDiv.style.display = 'none';
             gameDiv.style.display = 'block';
         });
 
+        // 轮到玩家猜测
         socket.on('your-turn', () => {
             statusDiv.innerText = '请开始猜测';
             guessInput.disabled = false;
@@ -138,14 +166,23 @@
             guessInput.value = '';
             errorMessage.innerText = '';
             guessInput.focus();
+
+            // 播放提示音
+            playSound(turnSound);
+
+            // 添加页面闪烁效果
+            gameDiv.classList.add('your-turn-highlight');
+            setTimeout(() => gameDiv.classList.remove('your-turn-highlight'), 3000);
         });
 
+        // 等待对手操作
         socket.on('wait-for-opponent', () => {
             statusDiv.innerText = '请等待对方猜测';
             guessInput.disabled = true;
             guessButton.disabled = true;
         });
 
+        // 显示猜测结果
         socket.on('guess-result', (data) => {
             const guessDiv = document.createElement('div');
             guessDiv.className = 'guess fade-in';
@@ -163,8 +200,17 @@
             guessesDiv.appendChild(guessDiv);
         });
 
+        // 游戏结束
         socket.on('game-over', (data) => {
             const isWinner = data.winner === socket.id;
+
+            // 播放胜利或失败提示音
+            if (isWinner) {
+                playSound(victorySound);
+            } else {
+                playSound(failSound);
+            }
+
             resultDiv.innerHTML = `
                 <p>${isWinner ? '你赢了！' : '你输了！'}</p>
                 <p>正确数字是：${data.targetNumber}</p>
@@ -174,6 +220,7 @@
 
             document.getElementById('restart-button').addEventListener('click', () => {
                 socket.emit('restart-game');
+                resultDiv.innerHTML = '<p>已请求再来一局，等待对方确认...</p>';
             });
 
             document.getElementById('exit-button').addEventListener('click', () => {
@@ -181,7 +228,7 @@
             });
         });
 
-        // 提示对方已请求再来一局
+        // 对方请求再来一局
         socket.on('opponent-waiting-for-restart', () => {
             resultDiv.innerHTML = `
                 <p>对方已请求再来一局...</p>
@@ -189,25 +236,22 @@
                 <button id="exit-button">退出</button>
             `;
 
-            // 保留“再来一局”和“退出”按钮
             document.getElementById('restart-button').addEventListener('click', () => {
                 socket.emit('restart-game');
+                resultDiv.innerHTML = '<p>已请求再来一局，等待对方确认...</p>';
             });
+
             document.getElementById('exit-button').addEventListener('click', () => {
                 socket.emit('exit-game');
             });
         });
 
-        socket.on('waiting-for-opponent', () => {
-            resultDiv.innerHTML = `
-                <p>已请求再来一局，等待对方确认...</p>
-            `;
-        });
-
+        // 游戏重启
         socket.on('game-restarted', () => {
             location.reload();
         });
 
+        // 提交猜测
         guessButton.addEventListener('click', submitGuess);
         guessInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') {
@@ -226,6 +270,27 @@
             guessInput.disabled = true;
             guessButton.disabled = true;
         }
+
+        // 播放提示音
+        function playSound(audioElement) {
+            audioElement.currentTime = 0; // 确保每次从头播放
+            audioElement.play().catch((err) => {
+                console.error('提示音播放失败：', err);
+            });
+        }
+
+        // 邀请功能
+        const inviteLink = `${window.location.origin}`;
+        copyLinkButton.addEventListener('click', () => {
+            navigator.clipboard.writeText(inviteLink).then(() => {
+                alert('邀请链接已复制到剪贴板！');
+            });
+        });
+
+        // 生成二维码
+        QRCode.toCanvas(qrCodeDiv, inviteLink, { width: 150 }, (error) => {
+            if (error) console.error(error);
+        });
     </script>
 </body>
 </html>
