@@ -7,7 +7,7 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
     cors: {
-        origin: '*', // 如果前后端分离，允许所有来源。可改为指定的前端域名。
+        origin: '*', // 允许跨域访问
         methods: ['GET', 'POST'],
     },
 });
@@ -32,6 +32,18 @@ class Game {
         this.restartRequests = new Set();
     }
 
+    // 随机生成一个四位不重复的数字
+    generateRandomNumber() {
+        const digits = [];
+        while (digits.length < 4) {
+            const randomDigit = Math.floor(Math.random() * 10); // 生成 0-9 的随机数
+            if (!digits.includes(randomDigit)) {
+                digits.push(randomDigit);
+            }
+        }
+        return digits.join(''); // 返回字符串形式的四位数字
+    }
+
     calculateResult(guess, target) {
         let a = 0, b = 0;
         for (let i = 0; i < 4; i++) {
@@ -45,7 +57,7 @@ class Game {
     }
 
     reset() {
-        this.targetNumber = this.generateRandomNumber(); // 随机生成目标数字
+        this.targetNumber = this.generateRandomNumber(); // 重新生成随机目标数字
         this.currentPlayer = null;
         this.guesses = [];
         this.restartRequests = new Set();
