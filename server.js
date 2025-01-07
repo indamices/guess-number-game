@@ -7,46 +7,51 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
+const port = 3000;
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-let game = {
-    targetNumber: generateRandomNumber(),
-    players: {},
-    currentPlayer: null,
-    guesses: [],
-    restartRequests: new Set(), // 用于记录请求“再来一局”的玩家
-};
-
-function generateRandomNumber() {
-    const digits = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
-    let number = '';
-    for (let i = 0; i < 4; i++) {
-        const index = Math.floor(Math.random() * digits.length);
-        number += digits.splice(index, 1)[0];
+// 游戏状态管理类
+class Game {
+    constructor() {
+        this.targetNumber = '1234'; // 固定目标数字便于测试
+        this.players = {};
+        this.currentPlayer = null;
+        this.guesses = [];
+        this.restartRequests = new Set();
     }
-    return number;
-}
 
-function calculateResult(guess, target) {
-    let a = 0, b = 0;
-    for (let i = 0; i < 4; i++) {
-        if (guess[i] === target[i]) {
-            a++;
-        } else if (target.includes(guess[i])) {
-            b++;
+    calculateResult(guess, target) {
+        let a = 0, b = 0;
+        for (let i = 0; i < 4; i++) {
+            if (guess[i] === target[i]) {
+                a++;
+            } else if (target.includes(guess[i])) {
+                b++;
+            }
         }
+        return `${a}A${b}B`;
     }
-    return `${a}A${b}B`;
+
+    reset() {
+        this.targetNumber = '1234'; // 固定目标数字
+        this.currentPlayer = null;
+        this.guesses = [];
+        this.restartRequests = new Set();
+        console.log('游戏已重置，目标数字为:', this.targetNumber);
+    }
 }
+
+let game = new Game();
 
 io.on('connection', (socket) => {
     console.log('一个玩家连接了:', socket.id);
 
-    // 初始化玩家
+    // 分配玩家角色
     if (!game.players.player1) {
         game.players.player1 = socket.id;
         socket.emit('role', 'player1');
@@ -55,16 +60,16 @@ io.on('connection', (socket) => {
         socket.emit('role', 'player2');
     }
 
-    // 如果两个玩家都连接了，随机决定先手
+    // 两位玩家都连接后开始游戏
     if (Object.keys(game.players).length === 2 && !game.currentPlayer) {
         startGame();
     }
 
-    // 监听玩家猜测
+    // 玩家提交猜测
     socket.on('guess', (guess) => {
         if (socket.id !== game.currentPlayer) return;
 
-        const result = calculateResult(guess, game.targetNumber);
+        const result = game.calculateResult(guess, game.targetNumber);
         const playerRole = socket.id === game.players.player1 ? 'player1' : 'player2';
 
         io.emit('guess-result', {
@@ -78,10 +83,9 @@ io.on('connection', (socket) => {
                 winner: socket.id,
                 targetNumber: game.targetNumber
             });
-            return; // 不重置游戏状态
+            return;
         }
 
-        // 切换玩家
         game.currentPlayer = game.currentPlayer === game.players.player1 ? game.players.player2 : game.players.player1;
         const otherPlayer = game.currentPlayer === game.players.player1 ? game.players.player2 : game.players.player1;
 
@@ -89,31 +93,32 @@ io.on('connection', (socket) => {
         io.to(otherPlayer).emit('wait-for-opponent');
     });
 
-// 监听玩家点击“再来一局”
-socket.on('restart-game', () => {
-    // 记录请求“再来一局”的玩家
-    game.restartRequests.add(socket.id);
+    // 玩家请求再来一局
+    socket.on('restart-game', () => {
+        game.restartRequests.add(socket.id);
+        socket.emit('waiting-for-opponent');
 
-    // 通知点击“再来一局”的玩家等待对方确认
-    socket.emit('waiting-for-opponent');
+        const otherPlayerSocketId = socket.id === game.players.player1 ? game.players.player2 : game.players.player1;
+        io.to(otherPlayerSocketId).emit('opponent-waiting-for-restart');
 
-    // 如果两位玩家都请求“再来一局”，则重新开始游戏
-    if (game.restartRequests.size === 2) {
-        resetGame();
-        io.emit('game-restarted');
-        startGame();
-    }
-});
-
-    // 监听玩家点击“退出”
-    socket.on('exit-game', () => {
-        // 重置游戏状态
-        resetGame();
-        // 通知当前玩家刷新页面
-        socket.emit('game-exited');
+        // 如果两位玩家都请求再来一局，重新开始游戏
+        if (game.restartRequests.size === 2) {
+            game.reset();
+            io.emit('game-restarted');
+        }
     });
 
-    // 监听玩家断开连接
+    // 玩家退出游戏
+    socket.on('exit-game', () => {
+        const playerRole = socket.id === game.players.player1 ? 'player1' : 'player2';
+        const otherPlayerSocketId = playerRole === 'player1' ? game.players.player2 : game.players.player1;
+
+        socket.emit('show-waiting');
+        io.to(otherPlayerSocketId).emit('opponent-exited');
+        game.reset();
+    });
+
+    // 玩家断开连接
     socket.on('disconnect', () => {
         console.log('玩家断开连接:', socket.id);
 
@@ -124,34 +129,29 @@ socket.on('restart-game', () => {
         }
 
         if (Object.keys(game.players).length < 2) {
-            resetGame();
-            io.emit('player-disconnected');
+            const remainingPlayer = game.players.player1 || game.players.player2;
+            if (remainingPlayer) {
+                io.to(remainingPlayer).emit('opponent-disconnected');
+            }
+            game.reset();
         }
     });
 });
 
+// 开始游戏
 function startGame() {
-    game.currentPlayer = Math.random() < 0.5 ? game.players.player1 : game.players.player2;
-    const otherPlayer = game.currentPlayer === game.players.player1 ? game.players.player2 : game.players.player1;
+    if (Object.keys(game.players).length === 2) {
+        game.currentPlayer = Math.random() < 0.5 ? game.players.player1 : game.players.player2;
+        const otherPlayer = game.currentPlayer === game.players.player1 ? game.players.player2 : game.players.player1;
 
-    io.to(game.currentPlayer).emit('your-turn');
-    io.to(otherPlayer).emit('wait-for-opponent');
-    io.emit('game-start');
+        io.to(game.currentPlayer).emit('your-turn');
+        io.to(otherPlayer).emit('wait-for-opponent');
+        io.emit('game-start');
+    } else {
+        console.log('等待另一位玩家加入...');
+    }
 }
 
-function resetGame() {
-    game = {
-        targetNumber: generateRandomNumber(),
-        players: {},
-        currentPlayer: null,
-        guesses: [],
-        restartRequests: new Set(), // 重置“再来一局”请求记录
-    };
-    console.log('游戏已重置');
-}
-
-server.listen(3000, () => {
-    console.log('服务器运行在 http://localhost:3000');
+server.listen(port, () => {
+    console.log(`服务器运行在 http://localhost:${port}`);
 });
-
-console.log('静态文件路径:', path.join(__dirname, 'public'));
