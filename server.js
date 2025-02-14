@@ -10,16 +10,15 @@ const io = new Server(server);
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('/', (req, res) => {
+    const roomId = req.query.roomId; // Get roomId from query parameters
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-let game = {
-    targetNumber: generateRandomNumber(),
-    players: {},
-    currentPlayer: null,
-    guesses: [],
-    restartRequests: new Set(), // 用于记录请求“再来一局”的玩家
-};
+const rooms = {}; // 房间列表
+
+function generateRoomId() {
+    return Math.random().toString(36).substring(2, 7);
+}
 
 function generateRandomNumber() {
     const digits = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
@@ -46,108 +45,128 @@ function calculateResult(guess, target) {
 io.on('connection', (socket) => {
     console.log('一个玩家连接了:', socket.id);
 
-    // 初始化玩家
-    if (!game.players.player1) {
-        game.players.player1 = socket.id;
-        socket.emit('role', 'player1');
-    } else if (!game.players.player2) {
-        game.players.player2 = socket.id;
-        socket.emit('role', 'player2');
-    }
+    let roomId = null;
 
-    // 如果两个玩家都连接了，随机决定先手
-    if (Object.keys(game.players).length === 2 && !game.currentPlayer) {
-        startGame();
-    }
+    socket.on('createRoom', () => {
+        roomId = generateRoomId(); // 生成唯一的房间 ID
+        rooms[roomId] = {
+            roomId: roomId,
+            players: [],
+            targetNumber: null,
+            currentPlayerIndex: null,
+            gameStarted: false,
+        };
+
+        // 加入房间
+        rooms[roomId].players.push(socket.id);
+        socket.join(roomId); // 加入 Socket.IO 房间
+        console.log(`Player ${socket.id} created and joined room ${roomId}`);
+
+        // 发送房间创建成功事件
+        socket.emit('roomCreated', { roomId: roomId });
+
+        // 发送房间信息更新
+        io.to(roomId).emit('roomUpdate', {
+            roomId: roomId,
+            players: rooms[roomId].players,
+        });
+    });
+
+
+    socket.on('disconnect', () => {
+        console.log('玩家断开连接:', socket.id);
+        // 处理玩家离开房间的逻辑
+        for (const id in rooms) {
+            const index = rooms[id].players.indexOf(socket.id);
+            if (index !== -1) {
+                rooms[id].players.splice(index, 1);
+                if (rooms[id].players.length === 0) {
+                    delete rooms[id];
+                    console.log(`Room ${id} is empty and has been deleted.`);
+                } else {
+                    io.to(id).emit('roomUpdate', {
+                        roomId: id,
+                        players: rooms[id].players,
+                    });
+                }
+                break;
+            }
+        }
+    });
 
     // 监听玩家猜测
     socket.on('guess', (guess) => {
-        if (socket.id !== game.currentPlayer) return;
+        if (!roomId || socket.id !== rooms[roomId].players[rooms[roomId].currentPlayerIndex]) return;
 
-        const result = calculateResult(guess, game.targetNumber);
-        const playerRole = socket.id === game.players.player1 ? 'player1' : 'player2';
+        const result = calculateResult(guess, rooms[roomId].targetNumber);
+        const playerIndex = rooms[roomId].players.indexOf(socket.id);
+        const playerRole = playerIndex === 0 ? 'player1' : 'player2';
 
-        io.emit('guess-result', {
+        io.to(roomId).emit('guess-result', {
             player: playerRole,
             guess: guess,
             result: result
         });
 
         if (result === '4A0B') {
-            io.emit('game-over', {
+            io.to(roomId).emit('game-over', {
                 winner: socket.id,
-                targetNumber: game.targetNumber
+                targetNumber: rooms[roomId].targetNumber
             });
-            return; // 不重置游戏状态
+            return;
         }
 
         // 切换玩家
-        game.currentPlayer = game.currentPlayer === game.players.player1 ? game.players.player2 : game.players.player1;
-        const otherPlayer = game.currentPlayer === game.players.player1 ? game.players.player2 : game.players.player1;
+        rooms[roomId].currentPlayerIndex = (rooms[roomId].currentPlayerIndex + 1) % 2;
+        const currentPlayer = rooms[roomId].players[rooms[roomId].currentPlayerIndex];
+        const otherPlayer = rooms[roomId].players[(rooms[roomId].currentPlayerIndex + 1) % 2];
 
-        io.to(game.currentPlayer).emit('your-turn');
+        io.to(currentPlayer).emit('your-turn');
         io.to(otherPlayer).emit('wait-for-opponent');
     });
 
-// 监听玩家点击“再来一局”
-socket.on('restart-game', () => {
-    // 记录请求“再来一局”的玩家
-    game.restartRequests.add(socket.id);
-
-    // 通知点击“再来一局”的玩家等待对方确认
-    socket.emit('waiting-for-opponent');
-
-    // 如果两位玩家都请求“再来一局”，则重新开始游戏
-    if (game.restartRequests.size === 2) {
-        resetGame();
-        io.emit('game-restarted');
-        startGame();
-    }
-});
-
-    // 监听玩家点击“退出”
-    socket.on('exit-game', () => {
-        // 重置游戏状态
-        resetGame();
-        // 通知当前玩家刷新页面
-        socket.emit('game-exited');
-    });
-
-    // 监听玩家断开连接
-    socket.on('disconnect', () => {
-        console.log('玩家断开连接:', socket.id);
-
-        if (socket.id === game.players.player1) {
-            delete game.players.player1;
-        } else if (socket.id === game.players.player2) {
-            delete game.players.player2;
+    socket.on('joinRoom', ({ roomId: roomIdToJoin }) => {
+        roomId = roomIdToJoin;
+        if (!rooms[roomId]) {
+            socket.emit('message', '房间不存在');
+            return;
+        }
+        if (rooms[roomId].gameStarted) {
+            socket.emit('message', '游戏已开始，无法加入');
+            return;
         }
 
-        if (Object.keys(game.players).length < 2) {
-            resetGame();
-            io.emit('player-disconnected');
+        // 加入房间
+        rooms[roomId].players.push(socket.id);
+        socket.join(roomId); // 加入 Socket.IO 房间
+        console.log(`Player ${socket.id} joined room ${roomId}`);
+
+        // 如果房间已满，开始游戏
+        if (rooms[roomId].players.length === 2) {
+            startGame(roomId);
+        } else {
+            // 通知房主有玩家加入，等待开始
+            io.to(roomId).emit('message', '等待其他玩家加入...');
         }
+
+        // 发送房间信息更新
+        io.to(roomId).emit('roomUpdate', {
+            roomId: roomId,
+            players: rooms[roomId].players,
+        });
     });
 });
 
-function startGame() {
-    game.currentPlayer = Math.random() < 0.5 ? game.players.player1 : game.players.player2;
-    const otherPlayer = game.currentPlayer === game.players.player1 ? game.players.player2 : game.players.player1;
+function startGame(roomId) {
+    rooms[roomId].targetNumber = generateRandomNumber();
+    rooms[roomId].gameStarted = true; // 设置游戏开始标志
+    rooms[roomId].currentPlayerIndex = Math.random() < 0.5 ? 0 : 1; // 随机选择起始玩家索引
+    const currentPlayer = rooms[roomId].players[rooms[roomId].currentPlayerIndex];
+    const otherPlayer = rooms[roomId].players[(rooms[roomId].currentPlayerIndex + 1) % 2];
 
-    io.to(game.currentPlayer).emit('your-turn');
-    io.to(otherPlayer).emit('wait-for-opponent');
-    io.emit('game-start');
-}
-
-function resetGame() {
-    game = {
-        targetNumber: generateRandomNumber(),
-        players: {},
-        currentPlayer: null,
-        guesses: [],
-        restartRequests: new Set(), // 重置“再来一局”请求记录
-    };
-    console.log('游戏已重置');
+    io.to(currentPlayer).emit('your-turn'); // 发送给当前玩家
+    io.to(otherPlayer).emit('wait-for-opponent'); // 发送给另一个玩家
+    io.to(roomId).emit('game-start'); // 发送给房间
 }
 
 server.listen(3000, () => {

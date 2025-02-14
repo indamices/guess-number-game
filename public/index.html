@@ -3,205 +3,213 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>四位数字猜谜游戏</title>
+    <title>多人猜数字游戏</title>
     <style>
         body {
             font-family: Arial, sans-serif;
             text-align: center;
             margin-top: 50px;
         }
-        #waiting {
-            font-size: 20px;
-            color: #555;
+        #initial-ui {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            margin-bottom: 20px;
         }
-        #game {
-            display: none; /* 初始隐藏，游戏开始后显示 */
+        #room-id-display {
+            display: none;
+            font-size: 18px;
+            margin-bottom: 20px;
+        }
+        #room-id-display span {
+            font-weight: bold;
+        }
+        #game-ui {
+            display: none;
+        }
+        #message {
+            font-size: 18px;
+            margin-bottom: 20px;
+        }
+        #input-container {
+            margin-bottom: 20px;
         }
         #guess-input {
-            font-size: 20px;
-            padding: 10px;
+            font-size: 16px;
+            padding: 8px;
             width: 200px;
-            margin-top: 20px;
         }
         #guess-button {
-            font-size: 20px;
-            padding: 10px 20px;
-            margin-top: 10px;
-            cursor: pointer;
-        }
-        #guess-button:hover {
-            background-color: #007bff;
-            color: white;
-        }
-        #guesses {
-            margin-top: 20px;
-            text-align: left;
-            display: inline-block;
-        }
-        .guess {
-            margin: 10px;
-            padding: 10px;
-            border: 1px solid #ccc;
-            border-radius: 5px;
-        }
-        .your-guess {
-            color: blue; /* 您的猜测用蓝色显示 */
-        }
-        .opponent-guess {
-            color: red; /* 对手的猜测用红色显示 */
-        }
-        #status {
-            font-size: 18px;
-            margin-top: 20px;
-            color: #333;
-        }
-        #result {
-            margin-top: 20px;
-            font-size: 18px;
-            color: green;
-        }
-        #result button {
             font-size: 16px;
-            padding: 10px 20px;
-            margin: 10px;
+            padding: 8px 16px;
             cursor: pointer;
+        }
+        #history {
+            list-style: none;
+            padding: 0;
+            margin-top: 20px;
+        }
+        #history li {
+            margin-bottom: 5px;
         }
     </style>
 </head>
 <body>
-    <h1>四位数字猜谜游戏</h1>
-    <div id="waiting">等待另一位玩家加入...</div>
-    <div id="game">
-        <p>请输入一个四位数（数字不重复）：</p>
-        <input type="text" id="guess-input" maxlength="4" placeholder="例如：1234">
-        <button id="guess-button">猜测</button>
-        <div id="status"></div>
-        <div id="guesses"></div>
-        <div id="result"></div>
+    <h1>多人猜数字游戏</h1>
+
+    <div id="initial-ui">
+        <button id="create-game-button">创建游戏</button>
+        <button id="join-game-button">加入游戏</button>
     </div>
+
+    <div id="room-id-display">
+        房间ID: <span id="room-id"></span>
+        <button id="invite-button">邀请玩家</button>
+    </div>
+
+    <div id="join-room-ui" style="display:none;">
+        <input type="text" id="room-id-input" placeholder="请输入房间ID">
+        <button id="join-room-button">加入房间</button>
+    </div>
+
+    <div id="game-ui" style="display:none;">
+        <div id="message"></div>
+        <div id="input-container">
+            <input type="text" id="guess-input" placeholder="请输入你的猜测 (4 位数字)">
+            <button id="guess-button">猜</button>
+        </div>
+        <ul id="history"></ul>
+    </div>
+
 
     <script src="/socket.io/socket.io.js"></script>
     <script>
         const socket = io();
-        const waitingDiv = document.getElementById('waiting');
-        const gameDiv = document.getElementById('game');
+        const messageDiv = document.getElementById('message');
         const guessInput = document.getElementById('guess-input');
         const guessButton = document.getElementById('guess-button');
-        const guessesDiv = document.getElementById('guesses');
-        const statusDiv = document.getElementById('status');
-        const resultDiv = document.getElementById('result');
+        const historyList = document.getElementById('history');
+        const createGameButton = document.getElementById('create-game-button');
+        const joinGameButton = document.getElementById('join-game-button');
+        const roomIdDisplay = document.getElementById('room-id-display');
+        const roomIdSpan = document.getElementById('room-id');
+        const inviteButton = document.getElementById('invite-button');
+        const initialUI = document.getElementById('initial-ui');
+        const gameUI = document.getElementById('game-ui');
+        const joinRoomUI = document.getElementById('join-room-ui');
 
-        let role = null; // 当前玩家身份
+        let targetNumber = null;
+        let isMyTurn = false;
+        let currentRoomId = null; // 保存当前房间ID
 
-        // 监听角色分配
-        socket.on('role', (playerRole) => {
-            role = playerRole;
-            waitingDiv.innerText = `你是 ${role === 'player1' ? '玩家1' : '玩家2'}，等待游戏开始...`;
+        // 获取URL参数
+        const urlParams = new URLSearchParams(window.location.search);
+        const roomIdFromUrl = urlParams.get('roomId');
+
+        if (roomIdFromUrl) {
+            joinRoomUI.style.display = 'none';
+            roomIdDisplay.style.display = 'block';
+            gameUI.style.display = 'block';
+            currentRoomId = roomIdFromUrl;
+            roomIdSpan.innerText = currentRoomId;
+            socket.emit('joinRoom', { roomId: roomIdFromUrl });
+        }
+
+        socket.on('connect', () => {
+            messageDiv.innerText = '已连接到服务器';
         });
 
-        // 监听游戏开始
-        socket.on('game-start', () => {
-            waitingDiv.style.display = 'none';
-            gameDiv.style.display = 'block';
+        socket.on('disconnect', () => {
+            messageDiv.innerText = '与服务器断开连接';
         });
 
-        // 监听轮到自己的回合
-        socket.on('your-turn', () => {
-            statusDiv.innerText = '请开始猜测';
-            guessInput.disabled = false;
-            guessButton.disabled = false;
-            guessInput.value = ''; // 清空输入框
-            guessInput.focus();
+        createGameButton.addEventListener('click', () => {
+            socket.emit('createRoom');
         });
 
-        // 监听等待对手猜测
-        socket.on('wait-for-opponent', () => {
-            statusDiv.innerText = '请等待对方猜测';
-            guessInput.disabled = true;
-            guessButton.disabled = true;
+        socket.on('roomCreated', (data) => {
+            currentRoomId = data.roomId;
+            roomIdSpan.innerText = currentRoomId;
+            initialUI.style.display = 'none';
+            roomIdDisplay.style.display = 'block';
+            gameUI.style.display = 'block';
+            messageDiv.innerText = `房间创建成功，房间ID: ${currentRoomId}，等待其他玩家加入...`;
         });
 
-        // 监听猜测结果
-        socket.on('guess-result', (data) => {
-            const guessDiv = document.createElement('div');
-            guessDiv.className = 'guess';
+        joinGameButton.addEventListener('click', () => {
+            initialUI.style.display = 'none';
+            joinRoomUI.style.display = 'block';
+            roomIdDisplay.style.display = 'none';
+            gameUI.style.display = 'none';
+        });
 
-            // 区分“您的猜测”和“对手的猜测”
-            if (data.player === role) {
-                guessDiv.innerText = `您的猜测：${data.guess}，结果：${data.result}`;
-                guessDiv.classList.add('your-guess');
+        inviteButton.addEventListener('click', () => {
+            const inviteLink = `${window.location.origin}/?roomId=${currentRoomId}`;
+            navigator.clipboard.writeText(inviteLink).then(() => {
+                messageDiv.innerText = '邀请链接已复制到剪贴板, 链接已包含房间ID';
+            }).catch(err => {
+                console.error('复制链接失败: ', err);
+                messageDiv.innerText = '复制邀请链接失败，请手动复制房间ID';
+            });
+        });
+
+        const joinRoomButtonElement = document.getElementById('join-room-button');
+        const joinRoomInput = document.getElementById('room-id-input');
+
+        joinRoomButtonElement.addEventListener('click', () => {
+            const roomIdToJoin = joinRoomInput.value.trim();
+            if (roomIdToJoin) {
+                socket.emit('joinRoom', { roomId: roomIdToJoin });
+                joinRoomUI.style.display = 'none';
+                roomIdDisplay.style.display = 'block';
+                gameUI.style.display = 'block';
             } else {
-                guessDiv.innerText = `对手的猜测：${data.guess}，结果：${data.result}`;
-                guessDiv.classList.add('opponent-guess');
-            }
-
-            guessesDiv.appendChild(guessDiv);
-        });
-
-        // 监听游戏结束
-        socket.on('game-over', (data) => {
-            const isWinner = data.winner === socket.id;
-            resultDiv.innerHTML = `
-                <p>${isWinner ? '你赢了！' : '你输了！'}</p>
-                <p>正确数字是：${data.targetNumber}</p>
-                <button id="restart-button">再来一局</button>
-                <button id="exit-button">退出</button>
-            `;
-
-            // 绑定“再来一局”按钮
-            document.getElementById('restart-button').addEventListener('click', () => {
-                socket.emit('restart-game');
-            });
-
-            // 绑定“退出”按钮
-            document.getElementById('exit-button').addEventListener('click', () => {
-                socket.emit('exit-game');
-            });
-        });
-
-        // 监听等待对方确认
-        socket.on('waiting-for-opponent', () => {
-            resultDiv.innerHTML = `<p>已请求再来一局，等待对方确认...</p>`;
-        });
-
-        // 监听游戏重新开始
-        socket.on('game-restarted', () => {
-            location.reload(); // 刷新页面
-        });
-
-        // 监听游戏退出
-        socket.on('game-exited', () => {
-            alert('游戏已退出');
-            location.reload();
-        });
-
-        // 监听玩家断开连接
-        socket.on('player-disconnected', () => {
-            alert('对手已断开连接，游戏结束！');
-            location.reload();
-        });
-
-        // 监听猜测按钮点击
-        guessButton.addEventListener('click', submitGuess);
-
-        // 监听回车键
-        guessInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                submitGuess();
+                messageDiv.innerText = '请输入房间ID';
             }
         });
 
-        // 提交猜测
-        function submitGuess() {
+        guessButton.addEventListener('click', () => {
+            if (!isMyTurn) {
+                messageDiv.innerText = '请等待轮到你';
+                return;
+            }
             const guess = guessInput.value;
-            if (!/^\d{4}$/.test(guess) || new Set(guess).size !== 4) {
-                alert('请输入一个四位数，且数字不重复！');
+            if (!/^\d{4}$/.test(guess)) {
+                messageDiv.innerText = '请输入 4 位数字';
                 return;
             }
             socket.emit('guess', guess);
-            guessInput.disabled = true;
-            guessButton.disabled = true;
-        }
+            guessInput.value = '';
+        });
+
+        socket.on('your-turn', () => {
+            messageDiv.innerText = '轮到你猜了';
+            isMyTurn = true;
+        });
+
+        socket.on('wait-for-opponent', () => {
+            messageDiv.innerText = '等待对方玩家...';
+            isMyTurn = false;
+        });
+
+        socket.on('game-start', () => {
+            messageDiv.innerText = '游戏开始！';
+        });
+
+        socket.on('guess-result', (data) => {
+            const item = document.createElement('li');
+            item.innerText = `${data.player} 猜了 ${data.guess}，结果：${data.result}`;
+            historyList.appendChild(item);
+        });
+
+        socket.on('game-over', (data) => {
+            messageDiv.innerText = `游戏结束！${socket.id === data.winner ? '你赢了！' : '你输了！'} 答案是 ${data.targetNumber}`;
+            isMyTurn = false;
+        });
+
+        socket.on('message', (message) => {
+            messageDiv.innerText = message;
+        });
     </script>
 </body>
 </html>
