@@ -55,6 +55,7 @@ io.on('connection', (socket) => {
             targetNumber: null,
             currentPlayerIndex: null,
             gameStarted: false,
+            creatorId: socket.id // Store creator's socket ID
         };
 
         // 加入房间
@@ -62,8 +63,8 @@ io.on('connection', (socket) => {
         socket.join(roomId); // 加入 Socket.IO 房间
         console.log(`Player ${socket.id} created and joined room ${roomId}`);
 
-        // 发送房间创建成功事件
-        socket.emit('roomCreated', { roomId: roomId });
+        // 发送房间创建成功事件, including creatorId
+        socket.emit('roomCreated', { roomId: roomId, creatorId: rooms[roomId].creatorId });
 
         // 发送房间信息更新
         io.to(roomId).emit('roomUpdate', {
@@ -141,13 +142,8 @@ io.on('connection', (socket) => {
         socket.join(roomId); // 加入 Socket.IO 房间
         console.log(`Player ${socket.id} joined room ${roomId}`);
 
-        // 如果房间已满，开始游戏
-        if (rooms[roomId].players.length === 2) {
-            startGame(roomId);
-        } else {
-            // 通知房主有玩家加入，等待开始
-            io.to(roomId).emit('message', '等待其他玩家加入...');
-        }
+       // 通知房主有玩家加入，等待开始
+        io.to(roomId).emit('message', '等待房主开始游戏...');
 
         // 发送房间信息更新
         io.to(roomId).emit('roomUpdate', {
@@ -155,18 +151,37 @@ io.on('connection', (socket) => {
             players: rooms[roomId].players,
         });
     });
+
+    socket.on('startGame', () => {
+        if (!roomId) {
+            socket.emit('message', '房间ID 未定义，请重新创建或加入房间');
+            return;
+        }
+        if (rooms[roomId].creatorId !== socket.id) {
+            socket.emit('message', '只有房主才能开始游戏');
+            return;
+        }
+        if (rooms[roomId].players.length < 2) {
+            io.to(roomId).emit('message', '至少需要 2 名玩家才能开始游戏');
+            return;
+        }
+        startGame(roomId);
+    });
 });
 
 function startGame(roomId) {
     rooms[roomId].targetNumber = generateRandomNumber();
-    rooms[roomId].gameStarted = true; // 设置游戏开始标志
-    rooms[roomId].currentPlayerIndex = Math.random() < 0.5 ? 0 : 1; // 随机选择起始玩家索引
+    rooms[roomId].gameStarted = true;
+    rooms[roomId].currentPlayerIndex = Math.random() < 0.5 ? 0 : 1;
     const currentPlayer = rooms[roomId].players[rooms[roomId].currentPlayerIndex];
     const otherPlayer = rooms[roomId].players[(rooms[roomId].currentPlayerIndex + 1) % 2];
 
-    io.to(currentPlayer).emit('your-turn'); // 发送给当前玩家
-    io.to(otherPlayer).emit('wait-for-opponent'); // 发送给另一个玩家
-    io.to(roomId).emit('game-start'); // 发送给房间
+    io.to(currentPlayer).emit('your-turn');
+    io.to(otherPlayer).emit('wait-for-opponent');
+
+    // 发送 game-start 事件，包含不同的消息
+    io.to(currentPlayer).emit('game-start', { message: '游戏开始！轮到你猜了' });
+    io.to(otherPlayer).emit('game-start', { message: '游戏开始！请等待对方猜测' });
 }
 
 server.listen(3000, () => {
